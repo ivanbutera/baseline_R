@@ -1,0 +1,165 @@
+---
+title: "Baseline_R_Cohen"
+author: "ibutera"
+date: "2023-11-28"
+output: ioslides_presentation
+---
+
+## Formulacion de preguntas de investigacion
+```
+    Vamos a estar analizando un analisis de los datos del paquete "arthistory" con informacion de obras de arte de dos textos de historiadores del arte, y con info de los artistas mencionados en ambos textos. 
+
+    Nos preguntamos de que raza o etnia suelen ser los artistas que mas se visualizan en algunos de los museos mas importantes del mundo, definiendo la popularidad de un artista o grupo etnico como la cantidad de apariciones en alguo de los museos analizados. 
+
+    Otro eje del análisis que queremos realizar es en la dimensión tempooral: es decir si la popularidad de las obras depende de su edad, esta última definida en función de su fecha de publicación.
+
+    En ultima instancia, esto nos permitirá decidir si existe alguna correlación entre la raza de los          artistas, su popularidad, y la fecha de creación de los cuadros.
+```
+
+
+## Importar librerias que vamos a usar
+```{r}
+library(dplyr)
+library(ggplot2)
+library(arthistory) #el dataset que vamos a usar
+library(DBI)
+library(odbc)
+```
+
+## Setup de la conexion a SQL Server y las tablas temp
+```{r}
+#estoy teniendo problemas con este paso: no estoy familiarizado con la librería DBI y al usar Linux no tengo SQL Server en mi computadora. Entiendo que lo que debería hacer es cargar los df del dataset como tablas (hecho acá abajo) y hacer los joins y cálculos con sentencias SQL. Como no puedo cargarlas, lo que voy a hacer es realizar los joins y cálculos con lenguaje R, y escribir cómo se haría con lenguaje SQL:
+# con <- dbConnect(odbc::odbc(), "MySQL")
+# dbExecute(con,"start transaction;")
+# dbExecute(con,"drop table if exists janson")
+# dbExecute(con,"drop table if exists gardner")
+# dbExecute(con,"drop table if exists artists")
+# dbWriteTable(con, "janson", worksjanson)
+# dbWriteTable(con, "gardner", worksgardner)
+# dbWriteTable(con, "artists", artists)
+# dbExecute(con,"commit;")
+```
+
+## Inspeccionar los data frames del paquete arthistory
+```{r}
+head(worksjanson)
+head(worksgardner)
+head(artists)
+```
+
+## Primer punto: estudiar la popularidad
+```{r}
+#definimos la popularidad de una categoria como la cantidad de veces que esta aparece exhibida en un museo
+  #  en SQL: SELECT
+  #             artist_name,
+  #             artist_race,
+  #             (n_whitney + n_moma) as popularity
+  #           INTO #pop_artistas   --nos la guardamos en memoria para despues.
+  #           FROM (
+  #             SELECT 
+  #              artist_name, 
+  #              SUM(whitney_count_to_year) as n_whitney,
+  #              SUM(moma_count_to_year) as n_moma
+  #            FROM artists
+  #            GROUP BY artist_name, artist_race
+  #           )
+
+pop_artistas <- artists %>%
+                group_by(artist_name, artist_race) %>%
+                summarize(
+                    popularity = sum(moma_count_to_year) + sum(whitney_count_to_year),
+                    moma_count_to_year = sum(moma_count_to_year),
+                    whitney_count_to_year = sum(whitney_count_to_year)      
+                  )
+head(pop_artistas)
+```
+
+
+## Aca visualizamos la popularidad por raza
+```{r}
+viz <- pop_artistas %>% 
+        filter(popularity > 0) %>%
+        ggplot(aes(x=artist_race, y=popularity)) +
+        geom_bar(stat='sum', fill='blue', alpha=.5) +
+        labs(title = "Popularidad por Raza", x = "Raza", y = "Popularidad")
+        
+viz #rendereo el grafico
+```
+
+
+## Aca tenemos que hacer algo ocn algun join
+```{r}
+  # SELECT
+  #   a.artist_name AS artist_name,
+  #   a.artist_race AS artist_race,
+  #   b.artist_gender AS artist_gender,
+  #   b.title_of_work AS title_of_work,
+  #   b.publication_year AS publication_year,
+  #   a.popularity AS popularity
+  # FROM #pop_artistas a
+  # LEFT JOIN worksjanson b
+  # ON a.artist_name = b.artist_name AND a.artist_race = b.artist_race
+  # WHERE columna_1 IS NOT NULL AND columna_2 IS NOT NULL AND ... AND columna_n IS NOT NULL --cada una por separado
+
+join_artistas <- pop_artistas %>%
+               left_join(worksjanson) %>%
+               select(
+                 artist_name,
+                 artist_race,
+                 artist_gender,
+                 title_of_work,
+                 publication_year,
+                 popularity,
+               ) %>%
+              na.omit()
+head(join_artistas)
+```
+
+## Aca estudiamos la 
+```{r}
+#   SELECT
+#     publication_year,
+#     avg(popularity) AS pop_promedio
+#   INTO #pop_promedio_por_anio
+#   FROM
+#       (SELECT
+#         a.artist_name AS artist_name,
+#         a.artist_race AS artist_race,
+#         b.artist_gender AS artist_gender,
+#         b.title_of_work AS title_of_work,
+#         b.publication_year AS publication_year,
+#         a.popularity AS popularity
+#       FROM #pop_artistas a
+#       LEFT JOIN worksjanson b
+#       ON a.artist_name = b.artist_name AND a.artist_race = b.artist_race
+#       )
+#   GROUP BY publication_year
+  
+pop_promedio_por_anio <- join_artistas %>%
+                        group_by(publication_year) %>%
+                        summarize(pop_promedio = mean(popularity))
+
+viz <- pop_promedio_por_anio %>%
+       ggplot(aes(x = publication_year, y = pop_promedio)) + 
+       geom_point(aes(color = 'blue', alpha=.5)) + geom_line(aes(color = 'blue', alpha=.5)) +
+       geom_text(aes(label = round(pop_promedio)), nudge_y = 3) + 
+       labs(title = "Evolución de Popularidad por Año de Publicación", x = "Año", y = "Popularidad Promedio")
+
+viz
+
+```
+
+
+## Conclusiones
+```
+    Se observa que la popularidad de los artistas de raza blanca es mayor que la de los artistas de otras razas. Otro factor clave en popularidad parece ser la antigüedad de las obras: cuanto más antiguas, son más populares; aunque habría que tener en cuenta que al ser más antiguas, naturalmente, el acumulado de tiempo de exposición en museos es mayor. Se observa un incremento en la popularidad de las obras más contemporáneas, aquellas publicadas luego del año 2010
+```
+
+## Aca realizaríamos los DROPS de las tablas en memoria para no ocasionar problemas
+```{r}
+#DROP TABLE #pop_artistas
+#DROP TABLE #pop_promedio_por_anio
+#dbRemoveTable(con, "janson")
+#dbRemoveTable(con, "gardner")
+#dbRemoveTable(con, "artists")
+```
